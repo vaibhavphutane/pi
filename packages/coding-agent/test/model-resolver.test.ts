@@ -15,10 +15,11 @@ import {
 	resolveCliModel,
 	resolveModelScope,
 	resolveModelScopeWithDiagnostics,
+	restoreModelFromSession,
 } from "../src/core/model-resolver.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
-import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
+import { createInMemoryModelRegistry, createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
 // Mock models for testing
@@ -829,6 +830,87 @@ describe("default model selection", () => {
 
 		expect(result.model?.provider).toBe("spark-two");
 		expect(result.model?.id).toBe("deepseek-v4-flash");
+	});
+
+	describe("automatic selection from approved catalogs", () => {
+		afterEach(() => vi.restoreAllMocks());
+
+		async function createApprovedCatalogRuntime() {
+			const runtime = getModelRuntime(
+				await createInMemoryModelRegistry(
+					AuthStorage.inMemory({ openrouter: { type: "api_key", key: "workspace-key" } }),
+				),
+			);
+			const approved = runtime.getModel("openrouter", "anthropic/claude-sonnet-4");
+			const revoked = runtime.getModel("openrouter", "anthropic/claude-opus-4.1");
+			if (!approved || !revoked) throw new Error("Expected static OpenRouter model metadata");
+			vi.spyOn(runtime, "getAvailableSnapshot").mockReturnValue([approved]);
+			return { runtime, approved, revoked };
+		}
+
+		test("skips a revoked saved default and selects an approved model", async () => {
+			const { runtime, approved, revoked } = await createApprovedCatalogRuntime();
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				defaultProvider: revoked.provider,
+				defaultModelId: revoked.id,
+				modelRuntime: runtime,
+			});
+			expect(result.model).toEqual(approved);
+		});
+
+		test("retains an approved saved default and its thinking setting", async () => {
+			const { runtime, approved } = await createApprovedCatalogRuntime();
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				defaultProvider: approved.provider,
+				defaultModelId: approved.id,
+				defaultThinkingLevel: "high",
+				modelRuntime: runtime,
+			});
+			expect(result.model).toEqual(approved);
+			expect(result.thinkingLevel).toBe("high");
+		});
+
+		test("leaves the automatic model unset until the workspace catalog is available", async () => {
+			const { runtime, revoked } = await createApprovedCatalogRuntime();
+			vi.mocked(runtime.getAvailableSnapshot).mockReturnValue([]);
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				defaultProvider: revoked.provider,
+				defaultModelId: revoked.id,
+				modelRuntime: runtime,
+			});
+			expect(result.model).toBeUndefined();
+		});
+
+		test("falls back from a revoked restored model and a revoked current candidate", async () => {
+			const { runtime, approved, revoked } = await createApprovedCatalogRuntime();
+			const result = await restoreModelFromSession(revoked.provider, revoked.id, revoked, false, runtime);
+			expect(result.model).toEqual(approved);
+			expect(result.fallbackMessage).toContain("not approved for the current workspace");
+		});
+
+		test("restores an approved session model", async () => {
+			const { runtime, approved } = await createApprovedCatalogRuntime();
+			const result = await restoreModelFromSession(approved.provider, approved.id, undefined, false, runtime);
+			expect(result).toEqual({ model: approved, fallbackMessage: undefined });
+		});
+
+		test("keeps explicit CLI selection independent of automatic catalog approval", async () => {
+			const { runtime, revoked } = await createApprovedCatalogRuntime();
+			const result = await findInitialModel({
+				cliProvider: revoked.provider,
+				cliModel: revoked.id,
+				scopedModels: [],
+				isContinuing: false,
+				modelRuntime: runtime,
+			});
+			expect(result.model).toEqual(revoked);
+		});
 	});
 
 	describe("persisted default model scoping", () => {

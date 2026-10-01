@@ -611,6 +611,13 @@ export interface InitialModelResult {
 	fallbackMessage: string | undefined;
 }
 
+function hasModelCatalogApproval(model: Model<Api>, modelRuntime: ModelRuntime): boolean {
+	return (
+		!modelRuntime.getProvider(model.provider)?.credentialScopedModels ||
+		modelRuntime.getAvailableSnapshot().some((available) => modelsAreEqual(available, model))
+	);
+}
+
 /**
  * Find the initial model to use based on priority:
  * 1. CLI args (provider + model)
@@ -675,7 +682,7 @@ export async function findInitialModel(options: {
 	// 3. Try saved default from settings if auth is configured.
 	if (defaultProvider && defaultModelId) {
 		const found = modelRuntime.getModel(defaultProvider, defaultModelId);
-		if (found && modelRuntime.hasConfiguredAuth(found.provider)) {
+		if (found && modelRuntime.hasConfiguredAuth(found.provider) && hasModelCatalogApproval(found, modelRuntime)) {
 			model = found;
 			const perModel = modelThinkingLevels?.[`${defaultProvider}/${defaultModelId}`];
 			if (perModel) {
@@ -722,23 +729,27 @@ export async function restoreModelFromSession(
 
 	// Check if restored model exists and still has auth configured
 	const hasConfiguredAuth = restoredModel ? modelRuntime.hasConfiguredAuth(restoredModel.provider) : false;
+	const hasApproval = restoredModel ? hasModelCatalogApproval(restoredModel, modelRuntime) : false;
 
-	if (restoredModel && hasConfiguredAuth) {
+	if (restoredModel && hasConfiguredAuth && hasApproval) {
 		if (shouldPrintMessages) {
 			console.log(chalk.dim(`Restored model: ${savedProvider}/${savedModelId}`));
 		}
 		return { model: restoredModel, fallbackMessage: undefined };
 	}
 
-	// Model not found or no API key - fall back
-	const reason = !restoredModel ? "model no longer exists" : "no auth configured";
+	const reason = !restoredModel
+		? "model no longer exists"
+		: !hasConfiguredAuth
+			? "no auth configured"
+			: "model is not approved for the current workspace";
 
 	if (shouldPrintMessages) {
 		console.error(chalk.yellow(`Warning: Could not restore model ${savedProvider}/${savedModelId} (${reason}).`));
 	}
 
 	// If we already have a model, use it as fallback
-	if (currentModel) {
+	if (currentModel && hasModelCatalogApproval(currentModel, modelRuntime)) {
 		if (shouldPrintMessages) {
 			console.log(chalk.dim(`Falling back to: ${currentModel.provider}/${currentModel.id}`));
 		}

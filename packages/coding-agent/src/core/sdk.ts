@@ -1,7 +1,13 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import {
+	clampThinkingLevel,
+	type Message,
+	type Model,
+	modelsAreEqual,
+	streamSimple,
+} from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -207,7 +213,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// If session has data, try to restore model from it
 	if (!model && hasExistingSession && sessionModel) {
 		const restoredModel = modelRuntime.getModel(sessionModel.provider, sessionModel.modelId);
-		if (restoredModel && modelRuntime.hasConfiguredAuth(restoredModel.provider)) {
+		if (
+			restoredModel &&
+			modelRuntime.hasConfiguredAuth(restoredModel.provider) &&
+			(!modelRuntime.getProvider(restoredModel.provider)?.credentialScopedModels ||
+				modelRuntime.getAvailableSnapshot().some((available) => modelsAreEqual(available, restoredModel)))
+		) {
 			model = restoredModel;
 		}
 		if (!model) {

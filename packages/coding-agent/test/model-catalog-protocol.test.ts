@@ -25,15 +25,15 @@ const lastModified = new Date("2099-01-01T00:00:00Z").toUTCString();
 const commonModel = {
 	id: modelId,
 	name: "Claude Sonnet 5",
-	provider: "openrouter",
+	provider: "fireworks",
 	reasoning: true,
 	input: ["text"],
 	cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
 	contextWindow: 200_000,
 	maxTokens: 64_000,
 };
-const legacyModel = { ...commonModel, api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" };
-const mixedApiModel = { ...commonModel, api: "anthropic-messages", baseUrl: "https://openrouter.ai/api" };
+const legacyModel = { ...commonModel, api: "openai-completions", baseUrl: "https://api.fireworks.ai/inference/v1" };
+const mixedApiModel = { ...commonModel, api: "anthropic-messages", baseUrl: "https://api.fireworks.ai/inference" };
 
 const index: ModelCatalogIndex = {
 	schemaVersion: 1,
@@ -47,9 +47,9 @@ const index: ModelCatalogIndex = {
 // The legacy revision predates typed shards, so typed requests fall back to the chat-only shard.
 const objects = new Map<string, unknown>([
 	[MODEL_CATALOG_INDEX_KEY, index],
-	[getModelCatalogProviderKey(legacyRevision, "openrouter", "legacy"), { [modelId]: legacyModel }],
-	[getModelCatalogProviderKey(mixedApiRevision, "openrouter", "legacy"), { [modelId]: mixedApiModel }],
-	[getModelCatalogProviderKey(mixedApiRevision, "openrouter", "typed"), [{ type: "chat", ...mixedApiModel }]],
+	[getModelCatalogProviderKey(legacyRevision, "fireworks", "legacy"), { [modelId]: legacyModel }],
+	[getModelCatalogProviderKey(mixedApiRevision, "fireworks", "legacy"), { [modelId]: mixedApiModel }],
+	[getModelCatalogProviderKey(mixedApiRevision, "fireworks", "typed"), [{ type: "chat", ...mixedApiModel }]],
 ]);
 
 /** Minimal stand-in for pi.dev's /api/models/providers/:provider route. */
@@ -107,7 +107,7 @@ describe("model catalog protocol with the current client", () => {
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 	});
 
-	it("negotiates the catalog for its version and reaches the OpenRouter API", async () => {
+	it("negotiates the catalog for its version and reaches the Fireworks API", async () => {
 		allowNetwork();
 		const runtime = await ModelRuntime.create({
 			credentials: new InMemoryCredentialStore(),
@@ -115,24 +115,24 @@ describe("model catalog protocol with the current client", () => {
 			catalogBaseUrl,
 			refreshOnCreate: false,
 		});
-		await runtime.setRuntimeApiKey("openrouter", "test-key");
-		const refresh = await runtime.refresh({ allowNetwork: true, force: true, providers: ["openrouter"] });
+		await runtime.setRuntimeApiKey("fireworks", "test-key");
+		const refresh = await runtime.refresh({ allowNetwork: true, force: true, providers: ["fireworks"] });
 		expect([...refresh.errors]).toEqual([]);
 
-		const catalogUrl = "/api/models/providers/openrouter?types=chat%2Cimage%2Cclassifier";
+		const catalogUrl = "/api/models/providers/fireworks?types=chat%2Cimage%2Cclassifier";
 		expect(requests).toEqual([catalogUrl, `${catalogUrl}&pi-version=${VERSION}`]);
 
 		const expectedModel =
 			selectModelCatalog(index, VERSION)?.revision === legacyRevision ? legacyModel : mixedApiModel;
-		const model = runtime.getModel("openrouter", modelId);
+		const model = runtime.getModel("fireworks", modelId);
 		expect(model).toMatchObject({ api: expectedModel.api, baseUrl: expectedModel.baseUrl });
-		if (!model) throw new Error(`Missing model: openrouter/${modelId}`);
+		if (!model) throw new Error(`Missing model: fireworks/${modelId}`);
 
 		let providerUrl: URL | undefined;
 		const nativeFetch = globalThis.fetch;
 		vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
 			const request = new Request(input, init);
-			if (new URL(request.url).origin !== "https://openrouter.ai") return nativeFetch(request);
+			if (new URL(request.url).origin !== "https://api.fireworks.ai") return nativeFetch(request);
 			providerUrl = new URL(request.url);
 			throw new Error("Provider request captured");
 		});
@@ -146,7 +146,7 @@ describe("model catalog protocol with the current client", () => {
 			vi.unstubAllGlobals();
 		}
 		expect(providerUrl?.pathname).toBe(
-			expectedModel.api === "anthropic-messages" ? "/api/v1/messages" : "/api/v1/chat/completions",
+			expectedModel.api === "anthropic-messages" ? "/inference/v1/messages" : "/inference/v1/chat/completions",
 		);
 	});
 });
