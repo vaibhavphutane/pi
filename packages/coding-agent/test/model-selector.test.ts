@@ -24,6 +24,7 @@ describe("model selector", () => {
 	afterEach(() => {
 		harness?.cleanup();
 		harness = undefined;
+		vi.restoreAllMocks();
 	});
 
 	it("keeps the current model marked while browsing", async () => {
@@ -102,5 +103,93 @@ describe("model selector", () => {
 			const rendered = stripAnsi(selector.render(120).join("\n"));
 			expect(rendered).toContain("Could not refresh 2 model catalogs (openai, anthropic); showing cached models.");
 		});
+		selector.dispose();
+	});
+
+	// Regression coverage for GitHub issue #10353.
+	it("excludes unapproved OpenRouter models from a saved scope", async () => {
+		harness = await createHarness();
+		const local = harness.getModel();
+		const unapproved = { ...local, provider: "openrouter", id: "unapproved/model" };
+		vi.spyOn(harness.session.modelRuntime, "getAvailableSnapshot").mockReturnValue([local]);
+		vi.spyOn(harness.session.modelRuntime, "getModel").mockImplementation((provider, id) =>
+			provider === "openrouter" && id === unapproved.id ? unapproved : local,
+		);
+		vi.spyOn(harness.session.modelRuntime, "refresh").mockResolvedValue({ aborted: false, errors: new Map() });
+		const selector = new ModelSelectorComponent(
+			createFakeTui(),
+			local,
+			harness.session.modelRuntime,
+			[{ model: unapproved }, { model: local }],
+			() => {},
+			() => {},
+		);
+
+		expect(stripAnsi(selector.render(120).join("\n"))).not.toContain("unapproved/model");
+		expect(stripAnsi(selector.render(120).join("\n"))).toContain(`${local.id} [${local.provider}]`);
+		await vi.waitFor(() => expect(stripAnsi(selector.render(120).join("\n"))).toContain("Model catalogs refreshed."));
+		expect(stripAnsi(selector.render(120).join("\n"))).not.toContain("unapproved/model");
+		selector.dispose();
+	});
+
+	// Regression coverage for GitHub issue #10353.
+	it("removes revoked scoped OpenRouter entries after refreshing and allows switching to all models", async () => {
+		harness = await createHarness();
+		const local = harness.getModel();
+		const revoked = { ...local, provider: "openrouter", id: "revoked/model" };
+		let available = [revoked, local];
+		vi.spyOn(harness.session.modelRuntime, "getAvailableSnapshot").mockImplementation(() => available);
+		vi.spyOn(harness.session.modelRuntime, "getModel").mockReturnValue(revoked);
+		vi.spyOn(harness.session.modelRuntime, "refresh").mockImplementation(async () => {
+			available = [local];
+			return { aborted: false, errors: new Map() };
+		});
+		const selected = vi.fn();
+		const selector = new ModelSelectorComponent(
+			createFakeTui(),
+			revoked,
+			harness.session.modelRuntime,
+			[{ model: revoked }],
+			selected,
+			() => {},
+		);
+
+		await vi.waitFor(() => expect(stripAnsi(selector.render(120).join("\n"))).toContain("Model catalogs refreshed."));
+		expect(stripAnsi(selector.render(120).join("\n"))).not.toContain("revoked/model");
+		selector.handleInput("\r");
+		expect(selected).not.toHaveBeenCalled();
+		selector.handleInput("\t");
+		expect(stripAnsi(selector.render(120).join("\n"))).toContain(`${local.id} [${local.provider}]`);
+		selector.handleInput("\r");
+		expect(selected).toHaveBeenCalledWith(local);
+	});
+
+	// Regression coverage for GitHub issue #10353.
+	it("reloads filtered availability when refreshing rejects after a credential change", async () => {
+		harness = await createHarness();
+		const local = harness.getModel();
+		const previous = { ...local, provider: "openrouter", id: "previous-workspace/model" };
+		let available = [previous, local];
+		vi.spyOn(harness.session.modelRuntime, "getAvailableSnapshot").mockImplementation(() => available);
+		vi.spyOn(harness.session.modelRuntime, "getModel").mockReturnValue(previous);
+		vi.spyOn(harness.session.modelRuntime, "refresh").mockImplementation(async () => {
+			available = [local];
+			throw new Error("workspace changed");
+		});
+		const selector = new ModelSelectorComponent(
+			createFakeTui(),
+			previous,
+			harness.session.modelRuntime,
+			[{ model: previous }],
+			() => {},
+			() => {},
+		);
+
+		await vi.waitFor(() => {
+			const rendered = stripAnsi(selector.render(120).join("\n"));
+			expect(rendered).toContain("Could not refresh model catalogs: workspace changed");
+			expect(rendered).not.toContain("previous-workspace/model");
+		});
+		selector.dispose();
 	});
 });

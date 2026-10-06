@@ -3,6 +3,10 @@ import type { AnyModel } from "./types.ts";
 export interface ModelsStoreEntry {
 	/** Persisted models of every type. */
 	models: readonly AnyModel[];
+	/** Non-secret credential identifier for a catalog restricted to one account or workspace. */
+	credentialScope?: string;
+	/** Exact model IDs approved by a credential-scoped catalog, including custom models. */
+	approvedModelIds?: readonly string[];
 	/** Unix timestamp from the remote catalog's Last-Modified header. */
 	lastModified?: number;
 	/** Unix timestamp of the last completed remote check. */

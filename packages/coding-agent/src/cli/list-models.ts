@@ -31,6 +31,25 @@ export async function listModels(
 	searchPattern?: string,
 	signal?: AbortSignal,
 ): Promise<void> {
+	signal?.throwIfAborted();
+	try {
+		const refresh = await modelRuntime.refresh({
+			providers: ["openrouter"],
+			allowNetwork: process.env.PI_OFFLINE === undefined,
+			force: true,
+			signal,
+		});
+		signal?.throwIfAborted();
+		const refreshError = refresh.errors.get("openrouter");
+		if (refreshError) {
+			console.error(chalk.yellow(`Warning: could not refresh OpenRouter models: ${refreshError.message}`));
+		}
+	} catch (error) {
+		signal?.throwIfAborted();
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(chalk.yellow(`Warning: could not refresh OpenRouter models: ${message}`));
+	}
+
 	const loadError = modelRuntime.getError();
 	if (loadError) {
 		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));

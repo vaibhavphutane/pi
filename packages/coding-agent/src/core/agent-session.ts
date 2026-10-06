@@ -1612,7 +1612,14 @@ export class AgentSession {
 
 	/** Scoped models for cycling (from --models flag) */
 	get scopedModels(): ReadonlyArray<{ model: Model<any>; thinkingLevel?: ThinkingLevel }> {
-		return this._scopedModels;
+		const availableIds = new Set(
+			this._modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),
+		);
+		return this._scopedModels.filter(
+			({ model }) =>
+				!this._modelRuntime.getProvider(model.provider)?.credentialScopedModels ||
+				availableIds.has(`${model.provider}\0${model.id}`),
+		);
 	}
 
 	/** Update scoped models for cycling */
@@ -3388,7 +3395,7 @@ export class AgentSession {
 			},
 			{
 				getModel: () => this.model,
-				getScopedModels: () => this._scopedModels,
+				getScopedModels: () => this.scopedModels,
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
 				getSignal: () => this.agent.signal,

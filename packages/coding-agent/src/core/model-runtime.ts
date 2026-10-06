@@ -226,7 +226,7 @@ export class ModelRuntime implements Models {
 		const providers = builtinProviderCatalog
 			.builtinProviders()
 			.map((provider) =>
-				provider.id === "radius"
+				provider.id === "radius" || provider.id === "openrouter"
 					? provider
 					: withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
 			);
@@ -327,8 +327,28 @@ export class ModelRuntime implements Models {
 		this.snapshot = {
 			...this.snapshot,
 			all,
-			available: all.filter((model) => this.snapshot.configuredProviders.has(model.provider)),
+			available: this.provisionalAvailableModels(all, this.snapshot.configuredProviders),
 		};
+	}
+
+	private provisionalAvailableModels(
+		models: readonly Model<Api>[],
+		configuredProviders: ReadonlySet<string>,
+	): readonly Model<Api>[] {
+		// Workspace approval checks run asynchronously. Keep only previously checked
+		// IDs until the next availability pass, including newly composed custom models.
+		const filteredProviders = new Set(
+			this.models
+				.getProviders()
+				.filter((provider) => provider.credentialScopedModels)
+				.map((provider) => provider.id),
+		);
+		const availableIds = new Set(this.snapshot.available.map((model) => `${model.provider}\0${model.id}`));
+		return models.filter(
+			(model) =>
+				configuredProviders.has(model.provider) &&
+				(!filteredProviders.has(model.provider) || availableIds.has(`${model.provider}\0${model.id}`)),
+		);
 	}
 
 	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<void> {
@@ -594,6 +614,12 @@ export class ModelRuntime implements Models {
 		credential: Credential | undefined,
 		signal: AbortSignal,
 	): Promise<void> {
+		if (this.models.getProvider(providerId)?.credentialScopedModels) {
+			this.snapshot = {
+				...this.snapshot,
+				available: this.snapshot.available.filter((model) => model.provider !== providerId),
+			};
+		}
 		try {
 			signal.throwIfAborted();
 			this.recomposeProvider(providerId);
@@ -837,7 +863,25 @@ export class ModelRuntime implements Models {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
-		this.config = await ModelConfig.load(this.modelsPath);
+		const config = await ModelConfig.load(this.modelsPath);
+		const changedCredentials = new Set(
+			this.models
+				.getProviders()
+				.filter(
+					(provider) =>
+						provider.credentialScopedModels &&
+						this.extensionProviders.get(provider.id)?.apiKey === undefined &&
+						this.config.getProvider(provider.id)?.apiKey !== config.getProvider(provider.id)?.apiKey,
+				)
+				.map((provider) => provider.id),
+		);
+		if (changedCredentials.size > 0) {
+			this.snapshot = {
+				...this.snapshot,
+				available: this.snapshot.available.filter((model) => !changedCredentials.has(model.provider)),
+			};
+		}
+		this.config = config;
 		this.configureRadiusProviders();
 		if (options.providers) {
 			for (const providerId of new Set(options.providers)) this.recomposeProvider(providerId);
@@ -912,7 +956,7 @@ export class ModelRuntime implements Models {
 			...this.snapshot,
 			auth,
 			configuredProviders,
-			available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
+			available: this.provisionalAvailableModels(this.snapshot.all, configuredProviders),
 		};
 	}
 
@@ -927,6 +971,12 @@ export class ModelRuntime implements Models {
 		const effective: ProviderConfigInput = { ...previous };
 		for (const [key, value] of Object.entries(config)) {
 			if (value !== undefined) (effective as Record<string, unknown>)[key] = value;
+		}
+		if (this.models.getProvider(providerId)?.credentialScopedModels && previous?.apiKey !== effective.apiKey) {
+			this.snapshot = {
+				...this.snapshot,
+				available: this.snapshot.available.filter((model) => model.provider !== providerId),
+			};
 		}
 		this.extensionProviders.set(providerId, effective);
 		this.recomposeProvider(providerId);

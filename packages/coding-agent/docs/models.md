@@ -14,6 +14,8 @@ For a built-in provider, start with `/login`, then choose a model with `/model`.
 
 Browse the [model catalog](https://pi.dev/models) for current providers, model IDs, capabilities, context limits, and pricing. Pi starts with its bundled catalog and can overlay newer catalog data from pi.dev. Cached catalog data remains available offline; run `pi update --models` to force a refresh.
 
+OpenRouter availability comes from its authenticated user catalog, which applies the logged-in workspace's provider preferences, privacy settings, and guardrails. Pi shows only approved model IDs with known metadata, including custom definitions in `models.json`. A failed refresh keeps the last verified catalog for the same credential; without a matching cache, no OpenRouter models appear. Authentication rejection clears approvals. Changing credentials requires a matching cache or a successful refresh. Run `/model` or `pi --list-models` to refresh availability, or `pi update --models` to bypass the five-minute refresh interval.
+
 ## Authenticate
 
 Run `/login` and select a provider. Pi stores credentials in [`auth.json`](configuration.md#agent-directory). Run `/logout` to remove stored credentials for a provider.

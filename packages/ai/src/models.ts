@@ -157,6 +157,9 @@ export interface Provider<TApi extends Api = Api> {
 	 */
 	readonly auth: ProviderAuth;
 
+	/** Resolve API-key credentials for cache restoration and availability filtering, without refreshing OAuth. */
+	readonly credentialScopedModels?: boolean;
+
 	/**
 	 * Current known chat models, sync. Static providers return their catalog;
 	 * dynamic providers return the list as of the last `refreshModels()` (empty
@@ -566,13 +569,28 @@ class ModelsImpl implements MutableModels {
 					} catch (error) {
 						credentialError = error;
 					}
+					let catalogCredential = storedCredential;
+					if (provider.credentialScopedModels && storedCredential?.type !== "oauth") {
+						catalogCredential = undefined;
+						if (credentialError === undefined) {
+							try {
+								catalogCredential = await this.resolveRefreshCredential(provider, storedCredential, signal);
+							} catch (error) {
+								credentialError = error;
+							}
+						}
+					}
 
-					// Restore cached provider state before auth resolution or network access.
-					await this.runProviderRefreshPhase(provider, storedCredential, false, undefined, generation, signal);
+					// Scoped catalogs need the locally resolved key before restoring workspace approvals.
+					// Other providers restore their cache before auth resolution or network access.
+					await this.runProviderRefreshPhase(provider, catalogCredential, false, undefined, generation, signal);
 					if (credentialError !== undefined) throw credentialError;
 					if (!allowNetwork || signal.aborted) return;
 
-					const credential = await this.resolveRefreshCredential(provider, storedCredential, signal);
+					const credential =
+						provider.credentialScopedModels && storedCredential?.type !== "oauth"
+							? catalogCredential
+							: await this.resolveRefreshCredential(provider, storedCredential, signal);
 					if (!credential) return;
 					await this.runProviderRefreshPhase(provider, credential, true, options.force, generation, signal);
 				})();
@@ -686,8 +704,13 @@ class ModelsImpl implements MutableModels {
 			: this.getProviders();
 		const checks = await Promise.all(
 			providers.map(async (provider) => {
-				const credential = await this.readCredential(provider.id, signal);
-				return { provider, credential, auth: await this.checkProviderAuth(provider, credential, signal) };
+				const stored = await this.readCredential(provider.id, signal);
+				const auth = await this.checkProviderAuth(provider, stored, signal);
+				const credential =
+					auth && provider.credentialScopedModels && stored?.type !== "oauth"
+						? await this.resolveRefreshCredential(provider, stored, signal)
+						: stored;
+				return { provider, credential, auth };
 			}),
 		);
 		return checks.filter((entry) => entry.auth !== undefined);
